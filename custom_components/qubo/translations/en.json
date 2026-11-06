@@ -1,0 +1,32 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Connect to Qubo",
+        "description": "Enter the email and password of your Qubo account (the same one used in the Qubo mobile app). An email-registered account is required: Qubo only issues long-lived refresh tokens to email accounts, which this integration needs for unattended 24/7 polling.",
+        "data": {
+          "email": "Email",
+          "password": "Password"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Failed to connect to the Qubo cloud service",
+      "invalid_auth": "Invalid email or password",
+      "unknown": "Unexpected error"
+    },
+    "abort": {
+      "already_configured": "This Qubo account is already configured"
+    }
+  },
+  "entity": {
+    "sensor": {
+      "pm25": {
+        "name": "PM2.5"
+      },
+      "filter_life": {
+        "name": "Filter life"
+      }
+    }
+  }
+}
