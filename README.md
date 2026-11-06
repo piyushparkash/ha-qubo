@@ -36,12 +36,13 @@ Copy `custom_components/qubo` into your Home Assistant `config/custom_components
 
 ## Configuration
 
-The integration asks for your Qubo account **email** and **password** - the same ones used in the Qubo mobile app.
+When you add the integration, you'll be asked to choose **email and password** or **phone number and OTP**.
 
 ### Authentication notes
 
-- **Use an email-registered account.** Qubo issues a refreshable 180-day session only to email accounts. Accounts created via phone number get a 1-hour session with no refresh token, which is unusable for a 24/7 Home Assistant connection, and Qubo rejects email/password login for phone-registered accounts outright (`HTTP 400: ERR_SM_002`).
-- If your only Qubo account was created via phone number, open the Qubo app, go to your profile, add/verify an email address, then register that email as its own login (you can safely reuse the same phone number for SMS verification during that signup).
+- **Use email login if you want this to keep working unattended.** Qubo issues a refreshable long-lived session only to email accounts. Qubo rejects email/password login for phone-registered accounts outright (`HTTP 400: ERR_SM_002`) - if your only Qubo account was created via phone number, open the Qubo app, go to your profile, add/verify an email address, then register that email as its own login (you can safely reuse the same phone number for SMS verification during that signup).
+- **Phone + OTP login is a convenience/fallback option, not a long-term setup.** Qubo issues no refresh token for phone-verified sessions - the connection this creates lasts about an hour and then simply stops updating (entities go unavailable). There is no automatic re-authentication; you'd need to remove and re-add the integration with a fresh OTP to restore it. Use this only if email login is temporarily unavailable (e.g. rate-limited) and you need the integration working right now for a short while.
+- If a phone number has more than one Qubo account linked to it, you'll be asked which account to connect after entering the OTP.
 - Home Assistant will show up as a new entry under **Qubo app → Account → Logged In Devices** (labeled "Home Assistant"). Logging that entry out from the app will disconnect Home Assistant until it re-authenticates.
 
 ### Debug logging

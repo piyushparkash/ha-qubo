@@ -3,16 +3,45 @@
     "step": {
       "user": {
         "title": "Connect to Qubo",
+        "menu_options": {
+          "email": "Email and password (recommended)",
+          "phone": "Phone number and OTP"
+        }
+      },
+      "email": {
+        "title": "Connect with email",
         "description": "Enter the email and password of your Qubo account (the same one used in the Qubo mobile app). An email-registered account is required: Qubo only issues long-lived refresh tokens to email accounts, which this integration needs for unattended 24/7 polling.",
         "data": {
           "email": "Email",
           "password": "Password"
         }
+      },
+      "phone": {
+        "title": "Connect with phone number",
+        "description": "Enter the phone number linked to your Qubo account. You'll receive an SMS code to verify it.\n\nNote: Qubo does not issue a long-lived session for phone logins, so this connection will stop updating after about an hour and cannot be silently renewed. Prefer email login for a setup that keeps working unattended.",
+        "data": {
+          "isd_code": "Country code",
+          "phone": "Phone number"
+        }
+      },
+      "phone_otp": {
+        "title": "Enter the SMS code",
+        "description": "Enter the one-time code sent to your phone.",
+        "data": {
+          "otp": "OTP code"
+        }
+      },
+      "phone_select_profile": {
+        "title": "Select account",
+        "description": "Multiple Qubo accounts are linked to this phone number. Choose which one to connect.",
+        "data": {
+          "account_uuid": "Account"
+        }
       }
     },
     "error": {
       "cannot_connect": "Failed to connect to the Qubo cloud service",
-      "invalid_auth": "Invalid email or password",
+      "invalid_auth": "Invalid email, password, or OTP code",
       "rate_limited": "Qubo's cloud is temporarily rate-limiting login attempts (\"Login Limit reached\"). Wait a few minutes before trying again.",
       "unknown": "Unexpected error"
     },

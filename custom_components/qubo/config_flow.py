@@ -14,14 +14,38 @@ from homeassistant.exceptions import HomeAssistantError
 from qubopy import QuboAuth
 from qubopy.exceptions import QuboAuthError, QuboConnectionError
 
-from .const import DEVICE_ATTRIBUTE, DOMAIN
+from .const import (
+    AUTH_METHOD_EMAIL,
+    AUTH_METHOD_PHONE,
+    CONF_ACCESS_TOKEN,
+    CONF_AUTH_METHOD,
+    CONF_ISD_CODE,
+    CONF_PHONE,
+    CONF_USER_UUID,
+    DEFAULT_ISD_CODE,
+    DEVICE_ATTRIBUTE,
+    DOMAIN,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
-STEP_USER_DATA_SCHEMA = vol.Schema(
+STEP_EMAIL_DATA_SCHEMA = vol.Schema(
     {
         vol.Required(CONF_EMAIL): str,
         vol.Required(CONF_PASSWORD): str,
+    }
+)
+
+STEP_PHONE_DATA_SCHEMA = vol.Schema(
+    {
+        vol.Required(CONF_ISD_CODE, default=DEFAULT_ISD_CODE): str,
+        vol.Required(CONF_PHONE): str,
+    }
+)
+
+STEP_PHONE_OTP_DATA_SCHEMA = vol.Schema(
+    {
+        vol.Required("otp"): str,
     }
 )
 
@@ -57,10 +81,27 @@ class QuboConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
     VERSION = 1
 
+    def __init__(self) -> None:
+        """Initialize the phone-login flow state."""
+        self._phone: str | None = None
+        self._isd_code: str | None = None
+        self._phone_session_uuid: str | None = None
+        self._phone_profiles: list[dict[str, Any]] = []
+        self._phone_auth: QuboAuth | None = None
+
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
-        """Handle the initial step."""
+        """Let the user choose email or phone login."""
+        return self.async_show_menu(
+            step_id="user",
+            menu_options=["email", "phone"],
+        )
+
+    async def async_step_email(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Handle email/password login."""
         errors: dict[str, str] = {}
         if user_input is not None:
             self._async_abort_entries_match({CONF_EMAIL: user_input[CONF_EMAIL]})
@@ -80,11 +121,120 @@ class QuboConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             else:
                 return self.async_create_entry(
                     title=user_input[CONF_EMAIL],
-                    data=user_input,
+                    data={**user_input, CONF_AUTH_METHOD: AUTH_METHOD_EMAIL},
                 )
 
         return self.async_show_form(
-            step_id="user", data_schema=STEP_USER_DATA_SCHEMA, errors=errors
+            step_id="email", data_schema=STEP_EMAIL_DATA_SCHEMA, errors=errors
+        )
+
+    async def async_step_phone(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Request an OTP for the given phone number.
+
+        Note: Qubo issues no refresh token for phone-verified sessions, so
+        this method only provides a session that lasts about an hour (see
+        README) - there is no silent re-authentication once it expires.
+        """
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            phone = user_input[CONF_PHONE]
+            isd_code = user_input[CONF_ISD_CODE]
+            self._async_abort_entries_match({CONF_PHONE: phone})
+            auth = await self.hass.async_add_executor_job(QuboAuth)
+            try:
+                otp_response = await auth.request_phone_otp(
+                    phone, isd_code=isd_code, device_attribute=DEVICE_ATTRIBUTE
+                )
+            except QuboConnectionError:
+                errors["base"] = "cannot_connect"
+            except QuboAuthError:
+                errors["base"] = "invalid_auth"
+            except Exception:  # noqa: BLE001
+                _LOGGER.exception("Unexpected exception requesting Qubo phone OTP")
+                errors["base"] = "unknown"
+            else:
+                self._phone = phone
+                self._isd_code = isd_code
+                self._phone_session_uuid = otp_response.get("uuid")
+                self._phone_auth = auth
+                return await self.async_step_phone_otp()
+
+        return self.async_show_form(
+            step_id="phone", data_schema=STEP_PHONE_DATA_SCHEMA, errors=errors
+        )
+
+    async def async_step_phone_otp(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Verify the OTP code and resolve the account profile."""
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            try:
+                profiles = await self._phone_auth.get_phone_otp_profiles(
+                    self._phone,
+                    user_input["otp"],
+                    isd_code=self._isd_code,
+                    session_uuid=self._phone_session_uuid,
+                    device_attribute=DEVICE_ATTRIBUTE,
+                )
+            except QuboConnectionError:
+                errors["base"] = "cannot_connect"
+            except QuboAuthError:
+                errors["base"] = "invalid_auth"
+            except Exception:  # noqa: BLE001
+                _LOGGER.exception("Unexpected exception verifying Qubo phone OTP")
+                errors["base"] = "unknown"
+            else:
+                if len(profiles) == 1:
+                    return await self._async_finish_phone_login(profiles, 0)
+                self._phone_profiles = profiles
+                return await self.async_step_phone_select_profile()
+
+        return self.async_show_form(
+            step_id="phone_otp", data_schema=STEP_PHONE_OTP_DATA_SCHEMA, errors=errors
+        )
+
+    async def async_step_phone_select_profile(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Let the user pick an account when several are linked to one phone."""
+        profile_choices = {
+            str(p.get("uuid")): p.get("email") or p.get("name") or str(p.get("uuid"))
+            for p in self._phone_profiles
+        }
+        if user_input is not None:
+            selected_uuid = user_input["account_uuid"]
+            index = next(
+                i
+                for i, p in enumerate(self._phone_profiles)
+                if str(p.get("uuid")) == selected_uuid
+            )
+            return await self._async_finish_phone_login(self._phone_profiles, index)
+
+        schema = vol.Schema({vol.Required("account_uuid"): vol.In(profile_choices)})
+        return self.async_show_form(step_id="phone_select_profile", data_schema=schema)
+
+    async def _async_finish_phone_login(
+        self, profiles: list[dict[str, Any]], index: int
+    ) -> FlowResult:
+        """Adopt the selected profile's tokens and create the config entry."""
+        try:
+            tokens = self._phone_auth.select_profile(profiles, profile_index=index)
+        finally:
+            await self._phone_auth.close()
+
+        title = profiles[index].get("email") or profiles[index].get("name") or self._phone
+        return self.async_create_entry(
+            title=f"{title} (phone login)",
+            data={
+                CONF_AUTH_METHOD: AUTH_METHOD_PHONE,
+                CONF_PHONE: self._phone,
+                CONF_ISD_CODE: self._isd_code,
+                CONF_ACCESS_TOKEN: tokens.access_token,
+                CONF_USER_UUID: tokens.user_uuid,
+            },
         )
 
 
