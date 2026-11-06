@@ -28,11 +28,22 @@ class QuboDataUpdateCoordinator(DataUpdateCoordinator[dict[str, QuboAirPurifier]
             update_interval=SCAN_INTERVAL,
         )
         self.entry = entry
-        self.auth = QuboAuth()
-        self.client = QuboClient(self.auth)
+        self.auth: QuboAuth | None = None
+        self.client: QuboClient | None = None
         self._logged_in = False
 
+    async def _async_ensure_client(self) -> None:
+        """Lazily construct the auth/client pair off the event loop.
+
+        QuboAuth() reads/writes a local device-id file synchronously in its
+        constructor, so it must not be called directly from async code.
+        """
+        if self.client is None:
+            self.auth = await self.hass.async_add_executor_job(QuboAuth)
+            self.client = QuboClient(self.auth)
+
     async def _async_login(self) -> None:
+        await self._async_ensure_client()
         await self.auth.login_with_email(
             self.entry.data[CONF_EMAIL],
             self.entry.data[CONF_PASSWORD],
