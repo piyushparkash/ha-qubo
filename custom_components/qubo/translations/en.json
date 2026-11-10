@@ -10,7 +10,7 @@
       },
       "email": {
         "title": "Connect with email",
-        "description": "Enter the email and password of your Qubo account (the same one used in the Qubo mobile app). An email-registered account is required: Qubo only issues long-lived refresh tokens to email accounts, which this integration needs for unattended 24/7 polling.",
+        "description": "Enter the email and password of your Qubo account (the same one used in the Qubo mobile app).",
         "data": {
           "email": "Email",
           "password": "Password"
@@ -18,7 +18,7 @@
       },
       "phone": {
         "title": "Connect with phone number",
-        "description": "Enter the phone number linked to your Qubo account. You'll receive an SMS code to verify it.\n\nNote: Qubo does not issue a long-lived session for phone logins, so this connection will stop updating after about an hour and cannot be silently renewed. Prefer email login for a setup that keeps working unattended.",
+        "description": "Enter the phone number linked to your Qubo account. You'll receive an SMS code to verify it.\n\nNote: this requires an email address on your Qubo account's profile (not necessarily one you log in with) - the integration uses it behind the scenes to get a long-lived session, just like email login.",
         "data": {
           "isd_code": "Country code",
           "phone": "Phone number"

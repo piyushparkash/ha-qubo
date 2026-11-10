@@ -21,13 +21,20 @@ from .const import (
     CONF_AUTH_METHOD,
     CONF_ISD_CODE,
     CONF_PHONE,
+    CONF_REFRESH_TOKEN,
     CONF_USER_UUID,
     DEFAULT_ISD_CODE,
     DEVICE_ATTRIBUTE,
     DOMAIN,
 )
+from .qubopy_patches import apply_patches
 
 _LOGGER = logging.getLogger(__name__)
+
+# finalize_phone_login() (used below) only exists on QuboAuth once this has
+# run; __init__.py only applies it on async_setup_entry, which is too late -
+# the config flow uses QuboAuth itself, before any entry exists.
+apply_patches()
 
 STEP_EMAIL_DATA_SCHEMA = vol.Schema(
     {
@@ -131,12 +138,7 @@ class QuboConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     async def async_step_phone(
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
-        """Request an OTP for the given phone number.
-
-        Note: Qubo issues no refresh token for phone-verified sessions, so
-        this method only provides a session that lasts about an hour (see
-        README) - there is no silent re-authentication once it expires.
-        """
+        """Request an OTP for the given phone number."""
         errors: dict[str, str] = {}
         if user_input is not None:
             phone = user_input[CONF_PHONE]
@@ -188,9 +190,20 @@ class QuboConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 errors["base"] = "unknown"
             else:
                 if len(profiles) == 1:
-                    return await self._async_finish_phone_login(profiles, 0)
-                self._phone_profiles = profiles
-                return await self.async_step_phone_select_profile()
+                    try:
+                        return await self._async_finish_phone_login(profiles, 0)
+                    except QuboConnectionError:
+                        errors["base"] = "cannot_connect"
+                    except QuboAuthError:
+                        errors["base"] = "invalid_auth"
+                    except Exception:  # noqa: BLE001
+                        _LOGGER.exception(
+                            "Unexpected exception finalizing Qubo phone login"
+                        )
+                        errors["base"] = "unknown"
+                else:
+                    self._phone_profiles = profiles
+                    return await self.async_step_phone_select_profile()
 
         return self.async_show_form(
             step_id="phone_otp", data_schema=STEP_PHONE_OTP_DATA_SCHEMA, errors=errors
@@ -200,6 +213,7 @@ class QuboConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
         """Let the user pick an account when several are linked to one phone."""
+        errors: dict[str, str] = {}
         profile_choices = {
             str(p.get("uuid")): p.get("email") or p.get("name") or str(p.get("uuid"))
             for p in self._phone_profiles
@@ -211,17 +225,32 @@ class QuboConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 for i, p in enumerate(self._phone_profiles)
                 if str(p.get("uuid")) == selected_uuid
             )
-            return await self._async_finish_phone_login(self._phone_profiles, index)
+            try:
+                return await self._async_finish_phone_login(self._phone_profiles, index)
+            except QuboConnectionError:
+                errors["base"] = "cannot_connect"
+            except QuboAuthError:
+                errors["base"] = "invalid_auth"
+            except Exception:  # noqa: BLE001
+                _LOGGER.exception("Unexpected exception finalizing Qubo phone login")
+                errors["base"] = "unknown"
 
         schema = vol.Schema({vol.Required("account_uuid"): vol.In(profile_choices)})
-        return self.async_show_form(step_id="phone_select_profile", data_schema=schema)
+        return self.async_show_form(
+            step_id="phone_select_profile", data_schema=schema, errors=errors
+        )
 
     async def _async_finish_phone_login(
         self, profiles: list[dict[str, Any]], index: int
     ) -> FlowResult:
-        """Adopt the selected profile's tokens and create the config entry."""
+        """Finalize the selected profile's session and create the config entry.
+
+        The OTP-verify response only carries a short-lived (~1hr) token with
+        no refresh token; finalize_phone_login() exchanges it for a real
+        session (see qubopy_patches docstring for why this extra step exists).
+        """
         try:
-            tokens = self._phone_auth.select_profile(profiles, profile_index=index)
+            tokens = await self._phone_auth.finalize_phone_login(profiles[index])
         finally:
             await self._phone_auth.close()
 
@@ -233,6 +262,7 @@ class QuboConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 CONF_PHONE: self._phone,
                 CONF_ISD_CODE: self._isd_code,
                 CONF_ACCESS_TOKEN: tokens.access_token,
+                CONF_REFRESH_TOKEN: tokens.refresh_token,
                 CONF_USER_UUID: tokens.user_uuid,
             },
         )

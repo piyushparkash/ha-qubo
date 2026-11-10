@@ -16,6 +16,7 @@ from .const import (
     AUTH_METHOD_PHONE,
     CONF_ACCESS_TOKEN,
     CONF_AUTH_METHOD,
+    CONF_REFRESH_TOKEN,
     CONF_USER_UUID,
     DEVICE_ATTRIBUTE,
     DOMAIN,
@@ -57,13 +58,17 @@ class QuboDataUpdateCoordinator(DataUpdateCoordinator[dict[str, QuboAirPurifier]
     async def _async_login(self) -> None:
         await self._async_ensure_client()
         if self._is_phone_login:
-            # Qubo issues no refresh token for phone-verified sessions, so
-            # there is nothing to silently re-authenticate with here - just
-            # adopt the access token obtained once during the config flow.
-            # It will stop working after it expires (about an hour); see
-            # the auth-error handling below and the README.
+            # Adopt the access/refresh token pair obtained once during the
+            # config flow (via finalize_phone_login(), see qubopy_patches) -
+            # qubopy's own refresh_session()/get_valid_access_token() renew
+            # this silently from here on, same as email login. Entries added
+            # before that finalize step existed have no refresh token in
+            # their data; CONF_REFRESH_TOKEN is then None and the session
+            # will die after ~1hr with no way to renew (see the auth-error
+            # handling below) - re-adding the integration fixes that.
             self.auth.set_tokens(
                 access_token=self.entry.data[CONF_ACCESS_TOKEN],
+                refresh_token=self.entry.data.get(CONF_REFRESH_TOKEN),
                 user_uuid=self.entry.data[CONF_USER_UUID],
             )
         else:
@@ -80,16 +85,15 @@ class QuboDataUpdateCoordinator(DataUpdateCoordinator[dict[str, QuboAirPurifier]
                 await self._async_login()
             devices = await self.client.get_all_devices()
         except QuboAuthError as err:
-            if self._is_phone_login:
-                # Re-running _async_login() would just reapply the same
-                # expired token - there is no silent way to get a new one
-                # without a fresh OTP, so fail this cycle outright instead
-                # of retrying pointlessly.
+            if self._is_phone_login and not self.entry.data.get(CONF_REFRESH_TOKEN):
+                # Pre-finalize-step entry with no refresh token at all -
+                # nothing to silently renew; re-running _async_login() would
+                # just reapply the same expired access token.
                 raise UpdateFailed(
-                    "Qubo phone-login session has expired (phone logins only "
-                    "last about an hour and cannot be silently renewed). "
-                    "Remove and re-add this integration with a fresh OTP, or "
-                    "switch to email login for an unattended setup."
+                    "Qubo phone-login session has expired and this entry has "
+                    "no refresh token to renew it (it was added before this "
+                    "integration learned how to get one). Remove and re-add "
+                    "this integration with a fresh OTP."
                 ) from err
             # Access token rejected and could not be silently refreshed - retry once
             # with a full re-login before giving up on this cycle.
