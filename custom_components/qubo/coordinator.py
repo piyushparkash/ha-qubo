@@ -18,7 +18,6 @@ from .const import (
     CONF_AUTH_METHOD,
     CONF_REFRESH_TOKEN,
     CONF_USER_UUID,
-    DEVICE_ATTRIBUTE,
     DOMAIN,
     SCAN_INTERVAL,
 )
@@ -75,7 +74,7 @@ class QuboDataUpdateCoordinator(DataUpdateCoordinator[dict[str, QuboAirPurifier]
             await self.auth.login_with_email(
                 self.entry.data[CONF_EMAIL],
                 self.entry.data[CONF_PASSWORD],
-                device_attribute=DEVICE_ATTRIBUTE,
+                device_attribute=self.auth.device_id,
             )
         self._logged_in = True
 

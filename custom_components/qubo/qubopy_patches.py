@@ -56,6 +56,60 @@ _PATCHED_ATTR = "_qubo_integration_patched"
 
 # Not in qubopy.const - only the native app's phone-login finalize step uses it.
 PATH_EMAIL_PROFILE_LOGIN = "/sms/api/v1/sp/{sp}/user/emailprofile/login"
+PATH_EMAIL_LOGIN = "/sms/api/v1/sp/{sp}/user/login?system=CS"
+LOGIN_DEVICE_NAME = "Home Assistant"
+
+
+async def _login_with_email(
+    self: Any, email: str, password: str, *, device_attribute: str | None = None
+) -> TokenPayload:
+    """Replay hero::Mobile_userManager::userEmailLogin from the APK."""
+    device_id = str(device_attribute or self.device_id)
+    headers = {
+        "Content-Type": "application/json",
+        "App-Id": self.app_id,
+        "Source": "ANDROID",
+        "User-Agent": "libcurl-agent",
+        "Source-Device-Id": device_id,
+        "Login-Device-Name": LOGIN_DEVICE_NAME,
+        "User-UUID": "",
+        "Subscriber-Key": "",
+    }
+    payload = {
+        "accessToken": "",
+        "username": email,
+        "password": password,
+        "deviceAttribute": device_id,
+    }
+    session = await self._get_session()
+    try:
+        async with session.post(
+            f"{self.base_url}{PATH_EMAIL_LOGIN.format(sp=self.sp_id)}",
+            data=(json.dumps(payload, indent=3) + "\n").encode("utf-8"),
+            headers=headers,
+        ) as response:
+            text = await response.text()
+            if response.status != 200:
+                raise QuboAuthError(
+                    f"Email login failed (HTTP {response.status}): {text[:500]}"
+                )
+            data = json.loads(text)
+    except aiohttp.ClientError as err:
+        raise QuboConnectionError(f"Network error during email login: {err}") from err
+    except json.JSONDecodeError as err:
+        raise QuboAuthError(f"Invalid JSON returned by server: {err}") from err
+
+    access_token = data.get("accessToken")
+    if not access_token:
+        raise QuboAuthError("Missing access token in email-login response")
+    self._tokens = TokenPayload(
+        access_token=access_token,
+        refresh_token=data.get("refreshToken"),
+        user_uuid=str(data.get("uuid") or data.get("userUUID") or ""),
+        mqtt_password=data.get("mqttPassword"),
+        expires_at=_decode_jwt_expiry(access_token) or (time.time() + 86400),
+    )
+    return self._tokens
 
 
 def _is_on(self: Any) -> bool:
@@ -232,6 +286,7 @@ def apply_patches() -> None:
         _LOGGER.debug("Applied qubopy QuboAirPurifier control/state patches")
 
     if not getattr(_QuboAuthClass, _PATCHED_ATTR, False):
+        _QuboAuthClass.login_with_email = _login_with_email
         _QuboAuthClass.finalize_phone_login = _finalize_phone_login
         setattr(_QuboAuthClass, _PATCHED_ATTR, True)
         _LOGGER.debug("Applied qubopy QuboAuth.finalize_phone_login patch")

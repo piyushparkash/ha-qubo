@@ -24,7 +24,6 @@ from .const import (
     CONF_REFRESH_TOKEN,
     CONF_USER_UUID,
     DEFAULT_ISD_CODE,
-    DEVICE_ATTRIBUTE,
     DOMAIN,
 )
 from .qubopy_patches import apply_patches
@@ -69,7 +68,7 @@ async def _validate_credentials(hass: HomeAssistant, email: str, password: str) 
     auth = await hass.async_add_executor_job(QuboAuth)
     try:
         tokens = await auth.login_with_email(
-            email, password, device_attribute=DEVICE_ATTRIBUTE
+            email, password, device_attribute=auth.device_id
         )
     except QuboAuthError as err:
         if RATE_LIMIT_MARKER in str(err):
@@ -147,7 +146,7 @@ class QuboConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             auth = await self.hass.async_add_executor_job(QuboAuth)
             try:
                 otp_response = await auth.request_phone_otp(
-                    phone, isd_code=isd_code, device_attribute=DEVICE_ATTRIBUTE
+                    phone, isd_code=isd_code, device_attribute=auth.device_id
                 )
             except QuboConnectionError:
                 errors["base"] = "cannot_connect"
@@ -179,7 +178,7 @@ class QuboConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     user_input["otp"],
                     isd_code=self._isd_code,
                     session_uuid=self._phone_session_uuid,
-                    device_attribute=DEVICE_ATTRIBUTE,
+                    device_attribute=self._phone_auth.device_id,
                 )
             except QuboConnectionError:
                 errors["base"] = "cannot_connect"
