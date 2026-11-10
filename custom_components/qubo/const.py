@@ -15,7 +15,11 @@ DEVICE_ATTRIBUTE = "Home Assistant"
 SCAN_INTERVAL = timedelta(seconds=60)
 
 SPEED_LEVELS = [1, 2, 3]
-PRESET_MODES = ["auto", "sleep", "manual"]
+# Real values confirmed from the app's own mode-label mapping (jadx-out
+# sources/Ab/g0.java): "sleep", "manual", "qsense" (shown as "AI Sense" in
+# the app), and an unlabeled default case treated as "auto". "qsense" was
+# missing here before, which hid the AI Sense preset entirely.
+PRESET_MODES = ["auto", "sleep", "manual", "qsense"]
 
 # Config entry data keys for auth. "email" stores email/password and lets the
 # coordinator log in fresh on every HA restart (long-lived refresh token).

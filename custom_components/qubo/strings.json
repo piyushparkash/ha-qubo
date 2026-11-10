@@ -50,6 +50,20 @@
     }
   },
   "entity": {
+    "fan": {
+      "purifier": {
+        "state_attributes": {
+          "preset_mode": {
+            "state": {
+              "auto": "Auto",
+              "sleep": "Sleep",
+              "manual": "Manual",
+              "qsense": "AI Sense"
+            }
+          }
+        }
+      }
+    },
     "sensor": {
       "pm25": {
         "name": "PM2.5"
