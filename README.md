@@ -20,6 +20,7 @@ Each purifier shows up as a **Fan** entity (on/off, 3-step speed, `auto`/`sleep`
 
 - This relies entirely on `qubopy`, an **unofficial** library built by reverse-engineering the Android app. It is not affiliated with or endorsed by Hero Electronix / Qubo.
 - Air purifier support in `qubopy` is marked `API Modeled / Untested` upstream - the request/response shapes are inferred from the app, not yet confirmed against physical purifier hardware by the library author. It is expected to work (the purifier commands are simple), but if something misbehaves, enable debug logging (below) and open an issue with the details.
+- This integration installs to `custom_components/qubo`, the same folder as [tanishqmanuja/ha-qubo](https://github.com/tanishqmanuja/ha-qubo). Don't install both - they will overwrite each other.
 - You are using Qubo's cloud account credentials. Use a dedicated **email**-registered Qubo account (see [Authentication notes](#authentication-notes)) rather than your primary phone-based account if you'd rather keep sessions separate.
 
 ## Installation via HACS
@@ -67,6 +68,11 @@ logger:
 Issues and PRs are welcome, especially:
 - Confirmation (or bug reports) from real Q200/Q400/Q500/Q1000 hardware.
 - Additional platforms (`switch` for `HSP` plugs, `light` for `HLB` bulbs, `binary_sensor`/`sensor` for `HDS`/`HGS`/`HDT`, `lock` for `HLM`/`HLW`) following the same coordinator pattern used for the fan/sensor platforms here.
+
+## Acknowledgements
+
+- [`qubopy`](https://github.com/selvakk2k/qubopy) by [@selvakk2k](https://github.com/selvakk2k) is the library this integration is built on. Thanks for the quick releases (including `publish_service_command` and the 0.3.2 fixes) and for upstreaming our patches.
+- [@darkknight001](https://github.com/darkknight001) contributed live air-quality updates over MQTT (#2) and tested them on a Q200.
 
 ## Disclaimer
 
