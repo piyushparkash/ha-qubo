@@ -5,10 +5,11 @@ import logging
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_EMAIL, CONF_PASSWORD
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from qubopy import QuboAuth, QuboClient
+from qubopy.mqtt import QuboMqttEvent, QuboMqttListener
 from qubopy.devices import QuboAirPurifier
 from qubopy.exceptions import QuboAuthError, QuboConnectionError, QuboError
 
@@ -39,6 +40,7 @@ class QuboDataUpdateCoordinator(DataUpdateCoordinator[dict[str, QuboAirPurifier]
         self.auth: QuboAuth | None = None
         self.client: QuboClient | None = None
         self._logged_in = False
+        self._mqtt: QuboMqttListener | None = None
 
     async def _async_ensure_client(self) -> None:
         """Lazily construct the auth/client pair off the event loop.
@@ -119,8 +121,65 @@ class QuboDataUpdateCoordinator(DataUpdateCoordinator[dict[str, QuboAirPurifier]
             except QuboError as err:
                 _LOGGER.debug("Failed to refresh %s: %s", purifier.name, err)
 
+        await self._async_setup_mqtt(purifiers)
+        await self._async_request_aqi(purifiers)
+
         return purifiers
 
+    async def _async_setup_mqtt(self, purifiers: dict[str, QuboAirPurifier]) -> None:
+        """Start the MQTT listener once, so air-quality arrives by push."""
+        if self._mqtt is not None or not purifiers:
+            return
+        unit_id = next((p.unit_id for p in purifiers.values() if p.unit_id), None)
+        if not unit_id:
+            return
+        listener = QuboMqttListener(self.client, unit_uuid=unit_id)
+        try:
+            await listener.start()
+        except (QuboError, ImportError, OSError) as err:
+            # Push is an optimisation: polling still works without it.
+            _LOGGER.debug("MQTT listener unavailable, staying on polling: %s", err)
+            return
+        listener.add_event_listener(self._handle_mqtt_event, service="aqiStatus")
+        self._mqtt = listener
+
+    @callback
+    def _handle_mqtt_event(self, event: QuboMqttEvent) -> None:
+        """Apply a pushed aqiStatus reading without waiting for the next poll."""
+        if not self.data:
+            return
+        purifier = self.data.get(event.device_uuid)
+        if purifier is None or purifier.shadow is None:
+            return
+        pm25 = event.parameters.get("PM25")
+        if pm25 is None:
+            return
+        purifier.shadow.reported["aqiStatus_PM25"] = pm25
+        self.async_set_updated_data(self.data)
+
+    async def _async_request_aqi(self, purifiers: dict[str, QuboAirPurifier]) -> None:
+        """Ask each purifier for a fresh air-quality sample.
+
+        These devices report air quality only when asked, and the request is
+        only honoured over MQTT - the REST command endpoint accepts the same
+        envelope and returns success without the device acting on it.
+        """
+        if self._mqtt is None:
+            return
+        for purifier in purifiers.values():
+            try:
+                await self._mqtt.publish_service_command(
+                    device_uuid=purifier.device_id,
+                    service="aqiRefresh",
+                    command="refresh",
+                    unit_uuid=purifier.unit_id,
+                )
+            except (QuboError, ValueError) as err:
+                _LOGGER.debug("aqiRefresh failed for %s: %s", purifier.name, err)
+
     async def async_close(self) -> None:
-        """Release the underlying HTTP session."""
+        """Release the MQTT listener and the underlying HTTP session."""
+        if self._mqtt is not None:
+            await self._mqtt.stop()
+            self._mqtt = None
         await self.client.close()
