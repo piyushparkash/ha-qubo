@@ -1,6 +1,7 @@
 """Data update coordinator for the Qubo integration."""
 from __future__ import annotations
 
+import functools
 import logging
 import time
 
@@ -18,6 +19,7 @@ from .const import (
     AUTH_METHOD_PHONE,
     CONF_ACCESS_TOKEN,
     CONF_AUTH_METHOD,
+    CONF_DEVICE_ID,
     CONF_REFRESH_TOKEN,
     CONF_USER_UUID,
     DOMAIN,
@@ -54,9 +56,25 @@ class QuboDataUpdateCoordinator(DataUpdateCoordinator[dict[str, QuboAirPurifier]
 
         QuboAuth() reads/writes a local device-id file synchronously in its
         constructor, so it must not be called directly from async code.
+
+        The device ID is kept in the config entry so it survives container
+        rebuilds (Qubo counts each distinct ID as a logged-in device). Entries
+        created before that existed have none: they keep using the ID qubopy
+        already derives from its file - so nothing changes for them on the
+        wire - and it is saved to the entry here for next time.
         """
         if self.client is None:
-            self.auth = await self.hass.async_add_executor_job(QuboAuth)
+            stored = self.entry.data.get(CONF_DEVICE_ID)
+            if stored:
+                self.auth = await self.hass.async_add_executor_job(
+                    functools.partial(QuboAuth, device_id=str(stored))
+                )
+            else:
+                self.auth = await self.hass.async_add_executor_job(QuboAuth)
+                self.hass.config_entries.async_update_entry(
+                    self.entry,
+                    data={**self.entry.data, CONF_DEVICE_ID: self.auth.device_id},
+                )
             self.client = QuboClient(self.auth)
 
     @property

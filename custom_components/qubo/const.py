@@ -36,5 +36,8 @@ CONF_ISD_CODE = "isd_code"
 CONF_ACCESS_TOKEN = "access_token"
 CONF_REFRESH_TOKEN = "refresh_token"
 CONF_USER_UUID = "user_uuid"
+# Stable per-entry device ID. Qubo registers each distinct ID as a logged-in
+# device (capped per account), so it must survive container rebuilds.
+CONF_DEVICE_ID = "device_id"
 
 DEFAULT_ISD_CODE = "+91"

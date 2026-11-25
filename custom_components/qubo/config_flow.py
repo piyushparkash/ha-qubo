@@ -19,6 +19,7 @@ from .const import (
     AUTH_METHOD_PHONE,
     CONF_ACCESS_TOKEN,
     CONF_AUTH_METHOD,
+    CONF_DEVICE_ID,
     CONF_ISD_CODE,
     CONF_PHONE,
     CONF_REFRESH_TOKEN,
@@ -61,8 +62,10 @@ STEP_PHONE_OTP_DATA_SCHEMA = vol.Schema(
 RATE_LIMIT_MARKER = "ERR_SM_050"
 
 
-async def _validate_credentials(hass: HomeAssistant, email: str, password: str) -> str:
-    """Validate credentials against the Qubo cloud and return the account UUID."""
+async def _validate_credentials(
+    hass: HomeAssistant, email: str, password: str
+) -> tuple[str, str]:
+    """Validate credentials; return (account UUID, device ID used to log in)."""
     # QuboAuth() reads/writes a local device-id file synchronously in its
     # constructor; keep that off the event loop.
     auth = await hass.async_add_executor_job(QuboAuth)
@@ -77,7 +80,7 @@ async def _validate_credentials(hass: HomeAssistant, email: str, password: str) 
     except QuboConnectionError as err:
         raise CannotConnect from err
     else:
-        return tokens.user_uuid
+        return tokens.user_uuid, auth.device_id
     finally:
         await auth.close()
 
@@ -112,7 +115,7 @@ class QuboConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         if user_input is not None:
             self._async_abort_entries_match({CONF_EMAIL: user_input[CONF_EMAIL]})
             try:
-                await _validate_credentials(
+                _, device_id = await _validate_credentials(
                     self.hass, user_input[CONF_EMAIL], user_input[CONF_PASSWORD]
                 )
             except CannotConnect:
@@ -127,7 +130,11 @@ class QuboConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             else:
                 return self.async_create_entry(
                     title=user_input[CONF_EMAIL],
-                    data={**user_input, CONF_AUTH_METHOD: AUTH_METHOD_EMAIL},
+                    data={
+                        **user_input,
+                        CONF_AUTH_METHOD: AUTH_METHOD_EMAIL,
+                        CONF_DEVICE_ID: device_id,
+                    },
                 )
 
         return self.async_show_form(
@@ -263,6 +270,7 @@ class QuboConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 CONF_ACCESS_TOKEN: tokens.access_token,
                 CONF_REFRESH_TOKEN: tokens.refresh_token,
                 CONF_USER_UUID: tokens.user_uuid,
+                CONF_DEVICE_ID: self._phone_auth.device_id,
             },
         )
 
