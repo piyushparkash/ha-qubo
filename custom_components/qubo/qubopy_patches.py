@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import time
 from typing import Any
 
@@ -58,6 +59,42 @@ _PATCHED_ATTR = "_qubo_integration_patched"
 PATH_EMAIL_PROFILE_LOGIN = "/sms/api/v1/sp/{sp}/user/emailprofile/login"
 PATH_EMAIL_LOGIN = "/sms/api/v1/sp/{sp}/user/login?system=CS"
 LOGIN_DEVICE_NAME = "Home Assistant"
+
+
+_EMAIL_RE = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
+_JWT_RE = re.compile(r"eyJ[\w-]{5,}\.[\w-]{5,}\.[\w-]*")
+_LONG_SECRET_RE = re.compile(r"[A-Za-z0-9_-]{32,}")
+
+
+def _redact(text: str) -> str:
+    """Strip emails, JWTs and long opaque strings from text bound for a log."""
+    text = _EMAIL_RE.sub("<email>", text)
+    text = _JWT_RE.sub("<token>", text)
+    return _LONG_SECRET_RE.sub("<redacted>", text)
+
+
+def _safe_error_detail(status: int, text: str) -> str:
+    """Summarise an error response for logs/exceptions without echoing it.
+
+    Exception messages end up in Home Assistant's log at warning/error level,
+    and a raw response body could echo back the username or a token. Only the
+    structured error code and message are kept, redacted and length-capped;
+    anything unparseable is dropped.
+    """
+    try:
+        data = json.loads(text)
+    except ValueError:
+        return f"HTTP {status}"
+    if not isinstance(data, dict):
+        return f"HTTP {status}"
+    code = data.get("code") or data.get("error")
+    msg = data.get("message") or data.get("errorMessage") or data.get("error_description")
+    if isinstance(msg, list):
+        msg = ", ".join(str(m) for m in msg)
+    parts = [str(p) for p in (code, msg) if p]
+    if not parts:
+        return f"HTTP {status}"
+    return f"HTTP {status}: {_redact(' - '.join(parts))[:200]}"
 
 
 async def _login_with_email(
@@ -91,7 +128,7 @@ async def _login_with_email(
             text = await response.text()
             if response.status != 200:
                 raise QuboAuthError(
-                    f"Email login failed (HTTP {response.status}): {text[:500]}"
+                    f"Email login failed ({_safe_error_detail(response.status, text)})"
                 )
             data = json.loads(text)
     except aiohttp.ClientError as err:
@@ -233,13 +270,9 @@ async def _finalize_phone_login(self: Any, profile: dict[str, Any]) -> TokenPayl
         async with session.post(url, json=payload, headers=headers) as response:
             text = await response.text()
             if response.status != 200:
-                _LOGGER.debug(
-                    "Phone-login finalize error response (HTTP %s): %s",
-                    response.status,
-                    text[:200],
-                )
                 raise QuboAuthError(
-                    f"Phone-login finalize failed (HTTP {response.status}): {text[:200]}"
+                    "Phone-login finalize failed "
+                    f"({_safe_error_detail(response.status, text)})"
                 )
             data = json.loads(text)
     except aiohttp.ClientError as err:
