@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import time
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_EMAIL, CONF_PASSWORD
@@ -25,6 +26,11 @@ from .const import (
 
 _LOGGER = logging.getLogger(__name__)
 
+# Qubo's cloud caps logins per account ({"code":"ERR_SM_050","message":
+# ["Login Limit reached"]}). Retrying every poll only keeps the cap tripped.
+RATE_LIMIT_MARKER = "ERR_SM_050"
+RATE_LIMIT_BACKOFF = 30 * 60  # seconds
+
 
 class QuboDataUpdateCoordinator(DataUpdateCoordinator[dict[str, QuboAirPurifier]]):
     """Fetch and cache state for every Qubo air purifier on the account."""
@@ -40,6 +46,7 @@ class QuboDataUpdateCoordinator(DataUpdateCoordinator[dict[str, QuboAirPurifier]
         self.auth: QuboAuth | None = None
         self.client: QuboClient | None = None
         self._logged_in = False
+        self._login_blocked_until = 0.0
         self._mqtt: QuboMqttListener | None = None
 
     async def _async_ensure_client(self) -> None:
@@ -56,29 +63,59 @@ class QuboDataUpdateCoordinator(DataUpdateCoordinator[dict[str, QuboAirPurifier]
     def _is_phone_login(self) -> bool:
         return self.entry.data.get(CONF_AUTH_METHOD) == AUTH_METHOD_PHONE
 
-    async def _async_login(self) -> None:
+    async def _async_login(self, *, force_fresh: bool = False) -> None:
         await self._async_ensure_client()
-        if self._is_phone_login:
-            # Adopt the access/refresh token pair obtained once during the
-            # config flow (via finalize_phone_login(), see qubopy_patches) -
-            # qubopy's own refresh_session()/get_valid_access_token() renew
-            # this silently from here on, same as email login. Entries added
-            # before that finalize step existed have no refresh token in
-            # their data; CONF_REFRESH_TOKEN is then None and the session
-            # will die after ~1hr with no way to renew (see the auth-error
-            # handling below) - re-adding the integration fixes that.
+        if time.monotonic() < self._login_blocked_until:
+            raise QuboAuthError(
+                "Qubo login limit reached; waiting before trying to log in again"
+            )
+        stored_refresh = self.entry.data.get(CONF_REFRESH_TOKEN)
+        if self._is_phone_login or (stored_refresh and not force_fresh):
+            # Reuse the session saved in the config entry instead of logging
+            # in again: every full login counts against Qubo's per-account
+            # login limit, and used to happen on every HA restart. Phone
+            # entries always work this way (see qubopy_patches); email
+            # entries start doing so once a session has been saved.
             self.auth.set_tokens(
                 access_token=self.entry.data[CONF_ACCESS_TOKEN],
-                refresh_token=self.entry.data.get(CONF_REFRESH_TOKEN),
+                refresh_token=stored_refresh,
                 user_uuid=self.entry.data[CONF_USER_UUID],
             )
         else:
-            await self.auth.login_with_email(
-                self.entry.data[CONF_EMAIL],
-                self.entry.data[CONF_PASSWORD],
-                device_attribute=self.auth.device_id,
-            )
+            _LOGGER.debug("Performing a full Qubo email login (no reusable session)")
+            try:
+                await self.auth.login_with_email(
+                    self.entry.data[CONF_EMAIL],
+                    self.entry.data[CONF_PASSWORD],
+                    device_attribute=self.auth.device_id,
+                )
+            except QuboAuthError as err:
+                if RATE_LIMIT_MARKER in str(err):
+                    self._login_blocked_until = time.monotonic() + RATE_LIMIT_BACKOFF
+                raise
         self._logged_in = True
+
+    @callback
+    def _persist_session(self) -> None:
+        """Save the live session so the next setup can reuse it, not log in."""
+        tokens = self.auth.tokens if self.auth else None
+        if tokens is None or not tokens.refresh_token:
+            return
+        data = self.entry.data
+        if (
+            data.get(CONF_ACCESS_TOKEN) == tokens.access_token
+            and data.get(CONF_REFRESH_TOKEN) == tokens.refresh_token
+        ):
+            return
+        self.hass.config_entries.async_update_entry(
+            self.entry,
+            data={
+                **data,
+                CONF_ACCESS_TOKEN: tokens.access_token,
+                CONF_REFRESH_TOKEN: tokens.refresh_token,
+                CONF_USER_UUID: tokens.user_uuid,
+            },
+        )
 
     async def _async_update_data(self) -> dict[str, QuboAirPurifier]:
         try:
@@ -100,7 +137,7 @@ class QuboDataUpdateCoordinator(DataUpdateCoordinator[dict[str, QuboAirPurifier]
             # with a full re-login before giving up on this cycle.
             self._logged_in = False
             try:
-                await self._async_login()
+                await self._async_login(force_fresh=True)
                 devices = await self.client.get_all_devices()
             except QuboError as login_err:
                 raise UpdateFailed(
@@ -108,6 +145,8 @@ class QuboDataUpdateCoordinator(DataUpdateCoordinator[dict[str, QuboAirPurifier]
                 ) from login_err
         except QuboConnectionError as err:
             raise UpdateFailed(f"Error communicating with Qubo cloud: {err}") from err
+
+        self._persist_session()
 
         purifiers: dict[str, QuboAirPurifier] = {
             device.device_id: device
