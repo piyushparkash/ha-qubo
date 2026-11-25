@@ -69,6 +69,15 @@ Issues and PRs are welcome, especially:
 - Confirmation (or bug reports) from real Q200/Q400/Q500/Q1000 hardware.
 - Additional platforms (`switch` for `HSP` plugs, `light` for `HLB` bulbs, `binary_sensor`/`sensor` for `HDS`/`HGS`/`HDT`, `lock` for `HLM`/`HLW`) following the same coordinator pattern used for the fan/sensor platforms here.
 
+## Running the tests
+
+```
+pip install -r requirements-test.txt
+pytest
+```
+
+The tests stub the few Home Assistant symbols the integration imports, so no Home Assistant install is needed.
+
 ## Acknowledgements
 
 - [`qubopy`](https://github.com/selvakk2k/qubopy) by [@selvakk2k](https://github.com/selvakk2k) is the library this integration is built on. Thanks for the quick releases (including `publish_service_command` and the 0.3.2 fixes) and for upstreaming our patches.

@@ -63,7 +63,7 @@ LOGIN_DEVICE_NAME = "Home Assistant"
 
 _EMAIL_RE = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
 _JWT_RE = re.compile(r"eyJ[\w-]{5,}\.[\w-]{5,}\.[\w-]*")
-_LONG_SECRET_RE = re.compile(r"[A-Za-z0-9_-]{32,}")
+_LONG_SECRET_RE = re.compile(r"[A-Za-z0-9_-]{32,}")
 
 
 def _redact(text: str) -> str:
